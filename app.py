@@ -380,10 +380,26 @@ def render_buoy_card(name, station_id, data):
             st.markdown("**Latest update:** Unavailable")
             return
 
+        history = data.get("history")
+
         timestamp = data.get("timestamp")
         wvht = safe_float(data.get("WVHT"))
         dpd = safe_float(data.get("DPD"))
         mwd = safe_float(data.get("MWD"))
+
+        if history is not None and not history.empty:
+            wave_rows = history[
+                history["WVHT"].notna() | history["DPD"].notna() | history["MWD"].notna()
+            ]
+
+            if not wave_rows.empty:
+                best_wave = wave_rows.iloc[0]
+                if wvht is None:
+                    wvht = safe_float(best_wave.get("WVHT"))
+                if dpd is None:
+                    dpd = safe_float(best_wave.get("DPD"))
+                if mwd is None:
+                    mwd = safe_float(best_wave.get("MWD"))
 
         c1, c2, c3 = st.columns(3)
         c1.metric("Wave Height", format_value(wvht, " ft"))
@@ -404,7 +420,6 @@ def render_buoy_card(name, station_id, data):
             st.write(" | ".join(desc_bits))
         else:
             st.write("Limited offshore data available.")
-
 
 def render_station_card(station_name, station_data):
     with st.container(border=True):
