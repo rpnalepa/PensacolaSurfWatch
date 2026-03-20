@@ -337,9 +337,9 @@ def render_buoy_card(name, station_id, data):
             return
 
         timestamp = data.get("timestamp")
-        wvht = data.get("WVHT")
-        dpd = data.get("DPD")
-        mwd = data.get("MWD")
+        wvht = safe_float(data.get("WVHT"))
+        dpd = safe_float(data.get("DPD"))
+        mwd = safe_float(data.get("MWD"))
 
         c1, c2, c3 = st.columns(3)
         c1.metric("Wave Height", format_value(wvht, " ft"))
