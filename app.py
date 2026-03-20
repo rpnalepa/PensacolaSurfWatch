@@ -350,7 +350,7 @@ def render_buoy_card(name, station_id, data):
         c2.metric("Dominant Period", format_value(dpd, " s"))
         c3.metric(
             "Direction",
-            f"{int(mwd)}° {direction_to_compass(mwd)}" if mwd is not None else "—"
+           f"{int(float(mwd))}° {direction_to_compass(float(mwd))}" if str(mwd).replace('.', '', 1).isdigit() else "—"
         )
 
         st.markdown(f"**Latest update:** {format_time_string(timestamp)}")
