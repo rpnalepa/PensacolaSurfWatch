@@ -13,11 +13,7 @@ import streamlit as st
 st.set_page_config(page_title="Pensacola Surf Watch", layout="wide")
 
 st.title("Pensacola Surf Watch")
-st.caption("Simple local buoy dashboard")
-
-
-# ===== YOUR EXISTING BUOY CARDS BELOW THIS =====
-# (do not delete anything below)
+st.caption("Offshore buoy trends, local station conditions, and a simple Pensacola surf outlook.")
 
 
 # =========================
@@ -350,7 +346,7 @@ def render_buoy_card(name, station_id, data):
         c2.metric("Dominant Period", format_value(dpd, " s"))
         c3.metric(
             "Direction",
-           f"{int(float(mwd))}° {direction_to_compass(float(mwd))}" if str(mwd).replace('.', '', 1).isdigit() else "—"
+            f"{int(mwd)}° {direction_to_compass(mwd)}" if mwd is not None else "—"
         )
 
         st.markdown(f"**Latest update:** {format_time_string(timestamp)}")
