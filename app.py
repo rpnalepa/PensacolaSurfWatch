@@ -127,23 +127,31 @@ def parse_ndbc_realtime_text(text):
     if not lines:
         raise ValueError("Empty NOAA response")
 
-    # NOAA realtime2 text usually has:
-    # line 1 = header
-    # line 2 = units
-    # remaining = data
-    non_comment = [line for line in lines if not line.startswith("#")]
-    if len(non_comment) < 3:
-        raise ValueError("Not enough non-comment lines in NOAA response")
+    header = None
+    data_lines = []
 
-    header = non_comment[0].split()
-    data_lines = non_comment[2:]  # skip units line
+    for line in lines:
+        stripped = line.strip()
+
+        # NOAA header often looks like:
+        #YY  MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD PRES ATMP WTMP DEWP VIS TIDE
+        if stripped.startswith("#"):
+            candidate = stripped.lstrip("#").strip()
+            parts = candidate.split()
+            if {"YY", "MM", "DD", "hh", "mm"}.issubset(set(parts)):
+                header = parts
+            continue
+
+        data_lines.append(stripped)
+
+    if header is None:
+        raise ValueError("Could not find NOAA header row")
 
     rows = []
     for line in data_lines:
         parts = line.split()
-        if len(parts) < len(header):
-            continue
-        rows.append(parts[:len(header)])
+        if len(parts) >= len(header):
+            rows.append(parts[:len(header)])
 
     if not rows:
         raise ValueError("No valid data rows found in NOAA response")
@@ -245,7 +253,7 @@ def wind_comment(wdir, wspd):
     if wdir is None or wspd is None:
         return "Wind data unavailable."
 
-    if (wdir >= 315 or wdir <= 45):
+    if wdir >= 315 or wdir <= 45:
         flow = "more offshore/favorable"
     elif 46 <= wdir <= 90 or 271 <= wdir < 315:
         flow = "more sideshore/mixed"
