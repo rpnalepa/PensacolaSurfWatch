@@ -16,7 +16,6 @@ st.title("Pensacola Surf Watch")
 st.caption("Simple local buoy dashboard")
 
 
-
 # ===== YOUR EXISTING BUOY CARDS BELOW THIS =====
 # (do not delete anything below)
 
