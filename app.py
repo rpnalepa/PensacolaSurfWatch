@@ -137,6 +137,25 @@ def fetch_text(url):
     return r.text
 
 
+def choose_best_row(df):
+    if df.empty:
+        return None
+
+    preferred_wave = df[
+        df[["WVHT", "DPD", "MWD"]].notna().any(axis=1)
+    ]
+    if not preferred_wave.empty:
+        return preferred_wave.iloc[0].to_dict()
+
+    preferred_wind = df[
+        df[["WDIR", "WSPD"]].notna().any(axis=1)
+    ]
+    if not preferred_wind.empty:
+        return preferred_wind.iloc[0].to_dict()
+
+    return df.iloc[0].to_dict()
+
+
 def parse_ndbc_realtime_text(text):
     lines = [line.rstrip() for line in text.splitlines() if line.strip()]
     if not lines:
@@ -214,9 +233,12 @@ def parse_ndbc_realtime_text(text):
     if df.empty:
         raise ValueError("All timestamps failed to parse")
 
-    latest = df.iloc[0].to_dict()
-    latest["history"] = df
-    return latest
+    best = choose_best_row(df)
+    if best is None:
+        raise ValueError("No usable buoy observations found")
+
+    best["history"] = df
+    return best
 
 
 @st.cache_data(ttl=900)
