@@ -86,8 +86,21 @@ def format_time_string(ts):
     except Exception:
         return "Time unavailable"
 
+def format_direction(deg, fallback="—"):
+    deg = safe_float(deg)
+    if deg is None:
+        return fallback
+    return f"{int(deg)}° {direction_to_compass(deg)}"
+
+
+def format_direction_paren(deg, fallback="—"):
+    deg = safe_float(deg)
+    if deg is None:
+        return fallback
+    return f"{int(deg)}° ({direction_to_compass(deg)})"
 
 def direction_to_compass(deg):
+    deg = safe_float(deg)
     if deg is None:
         return "—"
     dirs = [
@@ -344,10 +357,22 @@ def render_buoy_card(name, station_id, data):
         c1, c2, c3 = st.columns(3)
         c1.metric("Wave Height", format_value(wvht, " ft"))
         c2.metric("Dominant Period", format_value(dpd, " s"))
-        c3.metric(
-            "Direction",
-            f"{int(mwd)}° {direction_to_compass(mwd)}" if mwd is not None else "—"
-        )
+        c3.metric("Direction", format_direction(mwd))
+
+        st.markdown(f"**Latest update:** {format_time_string(timestamp)}")
+
+        desc_bits = []
+        if wvht is not None:
+            desc_bits.append(f"{wvht:.1f} ft")
+        if dpd is not None:
+            desc_bits.append(f"{dpd:.1f}s")
+        if mwd is not None:
+            desc_bits.append(format_direction_paren(mwd))
+
+        if desc_bits:
+            st.write(" | ".join(desc_bits))
+        else:
+            st.write("Limited offshore data available.")
 
         st.markdown(f"**Latest update:** {format_time_string(timestamp)}")
 
