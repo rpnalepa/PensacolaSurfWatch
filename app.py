@@ -1,169 +1,473 @@
+import math
 from datetime import datetime, timezone
 
 import pandas as pd
 import requests
 import streamlit as st
 
+
+# =========================
+# PAGE SETUP
+# =========================
 st.set_page_config(page_title="Pensacola Surf Watch", layout="wide")
 
+st.title("Pensacola Surf Watch")
+st.caption("Offshore buoy trends, local station conditions, and a simple Pensacola surf outlook.")
 
-# -----------------------------
+
+# =========================
 # CONFIG
-# -----------------------------
-STATIONS = {
-    "42001": {"name": "Mid Gulf"},
-    "42012": {"name": "Orange Beach"},
-    "42040": {"name": "Dauphin Island"},
-}
+# =========================
+BUOYS = [
+    {"id": "42012", "name": "Orange Beach"},
+    {"id": "42040", "name": "Dauphin Island"},
+    {"id": "42001", "name": "Mid Gulf"},
+    {"id": "42003", "name": "East Gulf"},
+]
 
-URL = "https://www.ndbc.noaa.gov/data/realtime2/{station}.txt"
+# You can swap / add local stations here later if you want.
+STATIONS = [
+    {
+        "name": "Pensacola NAS",
+        "url": "https://www.ndbc.noaa.gov/data/latest_obs/KPNS.rss",
+        "fallback_id": "KPNS",
+    },
+    {
+        "name": "Pensacola Beach",
+        "url": "https://www.ndbc.noaa.gov/data/latest_obs/PNBF1.rss",
+        "fallback_id": "PNBF1",
+    },
+    {
+        "name": "Dauphin Island",
+        "url": "https://www.ndbc.noaa.gov/data/latest_obs/DPIA1.rss",
+        "fallback_id": "DPIA1",
+    },
+]
 
 
-# -----------------------------
+# =========================
 # HELPERS
-# -----------------------------
-def safe_float(x):
+# =========================
+def safe_float(value, default=None):
     try:
-        return float(x)
-    except:
+        if value is None:
+            return default
+        s = str(value).strip()
+        if s in {"", "MM", "N/A", "NaN", "nan", "-999", "999.0"}:
+            return default
+        return float(s)
+    except (ValueError, TypeError):
+        return default
+
+
+def safe_int(value, default=None):
+    try:
+        if value is None:
+            return default
+        s = str(value).strip()
+        if s in {"", "MM", "N/A", "NaN", "nan", "-999", "999"}:
+            return default
+        return int(float(s))
+    except (ValueError, TypeError):
+        return default
+
+
+def format_value(value, suffix="", decimals=1, fallback="—"):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return fallback
+    return f"{value:.{decimals}f}{suffix}"
+
+
+def format_time_string(ts):
+    if ts is None or pd.isna(ts):
+        return "Time unavailable"
+    try:
+        return pd.to_datetime(ts).strftime("%b %d, %I:%M %p UTC")
+    except Exception:
+        return "Time unavailable"
+
+
+def direction_to_compass(deg):
+    if deg is None:
+        return "—"
+    dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    idx = int((deg + 11.25) / 22.5) % 16
+    return dirs[idx]
+
+
+def swell_direction_hint(deg):
+    if deg is None:
+        return "Unknown direction"
+
+    if 70 <= deg <= 140:
+        return "E/SE swell angle"
+    elif 141 <= deg <= 190:
+        return "S swell angle"
+    elif 191 <= deg <= 250:
+        return "SW/W swell angle"
+    elif 40 <= deg < 70:
+        return "NE/E swell angle"
+    else:
+        return "Less direct Gulf angle"
+
+
+def get_buoy_text(station_id):
+    url = f"https://www.ndbc.noaa.gov/data/realtime2/{station_id}.txt"
+    r = requests.get(url, timeout=15)
+    r.raise_for_status()
+    return r.text
+
+
+def parse_buoy_text(text):
+    lines = [line for line in text.splitlines() if line.strip() and not line.startswith("#")]
+    if len(lines) < 2:
+        return None
+
+    header = lines[0].split()
+    rows = [line.split() for line in lines[1:]]
+    rows = [r for r in rows if len(r) >= len(header)]
+
+    if not rows:
+        return None
+
+    df = pd.DataFrame(rows, columns=header)
+
+    needed_time_cols = ["YY", "MM", "DD", "hh", "mm"]
+    for col in needed_time_cols:
+        if col not in df.columns:
+            return None
+
+    def build_ts(row):
+        try:
+            yy = safe_int(row.get("YY"))
+            mm = safe_int(row.get("MM"))
+            dd = safe_int(row.get("DD"))
+            hh = safe_int(row.get("hh"))
+            minute = safe_int(row.get("mm"))
+
+            if None in {yy, mm, dd, hh, minute}:
+                return pd.NaT
+
+            if yy < 100:
+                yy += 2000
+
+            return pd.Timestamp(year=yy, month=mm, day=dd, hour=hh, minute=minute, tz="UTC")
+        except Exception:
+            return pd.NaT
+
+    df["timestamp"] = df.apply(build_ts, axis=1)
+
+    numeric_cols = [
+        "WVHT", "DPD", "APD", "MWD", "WDIR", "WSPD", "GST",
+        "ATMP", "WTMP", "PRES"
+    ]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = df[col].apply(safe_float)
+
+    df = df.sort_values("timestamp", ascending=False).reset_index(drop=True)
+    latest = df.iloc[0].to_dict()
+    latest["history"] = df
+    return latest
+
+
+@st.cache_data(ttl=900)
+def get_buoy_data(station_id):
+    try:
+        text = get_buoy_text(station_id)
+        return parse_buoy_text(text)
+    except Exception:
         return None
 
 
-def parse_data(station):
-    r = requests.get(URL.format(station=station), timeout=10)
-    lines = r.text.split("\n")
+@st.cache_data(ttl=900)
+def get_station_rss(url, fallback_id):
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        text = r.text
 
-    header = lines[0].replace("#", "").split()
-    data = [l.split() for l in lines[2:] if len(l.split()) == len(header)]
+        title = None
+        pub_date = None
+        description = None
 
-    df = pd.DataFrame(data, columns=header)
+        if "<title>" in text:
+            parts = text.split("<title>")
+            if len(parts) > 2:
+                title = parts[2].split("</title>")[0].strip()
 
-    for col in ["WVHT", "DPD", "MWD", "WSPD", "WDIR"]:
-        if col in df:
-            df[col] = df[col].apply(safe_float)
+        if "<pubDate>" in text:
+            pub_date = text.split("<pubDate>")[1].split("</pubDate>")[0].strip()
 
-    return df.iloc[0]
+        if "<description>" in text:
+            description = text.split("<description>")[1].split("</description>")[0].strip()
+
+        return {
+            "station_id": fallback_id,
+            "title": title,
+            "pub_date": pub_date,
+            "description": description,
+        }
+    except Exception:
+        return {
+            "station_id": fallback_id,
+            "title": fallback_id,
+            "pub_date": None,
+            "description": None,
+        }
 
 
-def deg_to_compass(d):
-    if d is None:
-        return "—"
-    dirs = ["N","NE","E","SE","S","SW","W","NW"]
-    return dirs[int((d+22.5)//45)%8]
+def wind_comment(wdir, wspd):
+    if wdir is None or wspd is None:
+        return "Wind data unavailable."
 
-
-# -----------------------------
-# SURF LOGIC
-# -----------------------------
-def surf_score(buoys):
-    dirs = []
-    periods = []
-    heights = []
-
-    for b in buoys.values():
-        if b is None:
-            continue
-        dirs.append(b.get("MWD"))
-        periods.append(b.get("DPD"))
-        heights.append(b.get("WVHT"))
-
-    if not dirs:
-        return "No Data"
-
-    avg_dir = sum([d for d in dirs if d])/len([d for d in dirs if d])
-    avg_period = sum([p for p in periods if p])/len([p for p in periods if p])
-    avg_height = sum([h for h in heights if h])/len([h for h in heights if h])
-
-    score = 0
-
-    if 110 <= avg_dir <= 180:
-        score += 40
-    elif 90 <= avg_dir <= 200:
-        score += 25
+    # Rough Gulf Coast / Pensacola take:
+    # Offshore-ish: N, NNE, NE
+    # Side/side-on: E, ENE, NW
+    # Onshore-ish: SE, S, SSW, SW
+    if (wdir >= 315 or wdir <= 45):
+        flow = "more offshore/favorable"
+    elif 46 <= wdir <= 90 or 271 <= wdir < 315:
+        flow = "more sideshore/mixed"
+    elif 91 <= wdir <= 225:
+        flow = "more onshore/unfavorable"
     else:
-        score += 10
+        flow = "mixed"
 
-    if avg_period >= 7:
-        score += 30
-    elif avg_period >= 6:
-        score += 20
+    if wspd < 6:
+        strength = "light"
+    elif wspd < 12:
+        strength = "moderate"
     else:
-        score += 10
+        strength = "strong"
 
-    if avg_height >= 1:
-        score += 30
+    return f"{strength.capitalize()} {direction_to_compass(wdir)} wind, {flow} for local surf."
+
+
+def score_surf(buoy_data_list):
+    valid = [b for b in buoy_data_list if b is not None]
+    if not valid:
+        return {
+            "headline": "No buoy data available",
+            "body": "Could not build a local outlook from offshore buoy data right now."
+        }
+
+    heights = [b.get("WVHT") for b in valid if b.get("WVHT") is not None]
+    periods = [b.get("DPD") for b in valid if b.get("DPD") is not None]
+    dirs = [b.get("MWD") for b in valid if b.get("MWD") is not None]
+
+    avg_h = sum(heights) / len(heights) if heights else None
+    avg_p = sum(periods) / len(periods) if periods else None
+    avg_d = sum(dirs) / len(dirs) if dirs else None
+
+    if avg_h is None or avg_p is None:
+        return {
+            "headline": "Incomplete buoy picture",
+            "body": "There is some offshore data, but not enough to build a clean outlook."
+        }
+
+    if avg_h >= 4 and avg_p >= 7:
+        headline = "Most likely rideable"
+        body = (
+            f"Offshore Gulf energy looks more real than background chop right now "
+            f"with average swell around {avg_h:.1f} ft at {avg_p:.1f}s."
+        )
+    elif avg_h >= 2.5 and avg_p >= 6:
+        headline = "Possible small surf"
+        body = (
+            f"There is at least some Gulf energy to watch, averaging about "
+            f"{avg_h:.1f} ft at {avg_p:.1f}s offshore."
+        )
     else:
-        score += 10
+        headline = "Likely weak / marginal"
+        body = (
+            f"Offshore energy looks limited right now, averaging roughly "
+            f"{avg_h:.1f} ft at {avg_p:.1f}s."
+        )
 
-    if score >= 80:
-        return "Good"
-    elif score >= 55:
-        return "Fair"
-    elif score >= 35:
-        return "Marginal"
-    else:
-        return "Poor"
+    if avg_d is not None:
+        body += f" Mean swell direction is around {avg_d:.0f}° ({direction_to_compass(avg_d)}), which reads as {swell_direction_hint(avg_d).lower()}."
+
+    return {
+        "headline": headline,
+        "body": body
+    }
 
 
-# -----------------------------
-# HEADER
-# -----------------------------
-st.title("Pensacola Surf Watch")
+def render_buoy_card(name, station_id, data):
+    with st.container(border=True):
+        st.markdown(f"### {name}")
+        st.caption(f"Buoy {station_id}")
+
+        if not data:
+            st.error("No buoy data available.")
+            st.markdown("**Latest update:** Unavailable")
+            return
+
+        timestamp = data.get("timestamp")
+        wvht = data.get("WVHT")
+        dpd = data.get("DPD")
+        mwd = data.get("MWD")
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Wave Height", format_value(wvht, " ft"))
+        c2.metric("Dominant Period", format_value(dpd, " s"))
+        c3.metric("Direction", f"{int(mwd)}° {direction_to_compass(mwd)}" if mwd is not None else "—")
+
+        st.markdown(f"**Latest update:** {format_time_string(timestamp)}")
+
+        desc_bits = []
+        if wvht is not None:
+            desc_bits.append(f"{wvht:.1f} ft")
+        if dpd is not None:
+            desc_bits.append(f"{dpd:.1f}s")
+        if mwd is not None:
+            desc_bits.append(f"{int(mwd)}° ({direction_to_compass(mwd)})")
+
+        if desc_bits:
+            st.write(" | ".join(desc_bits))
+        else:
+            st.write("Limited offshore data available.")
+
+
+def render_station_card(station_name, station_data):
+    with st.container(border=True):
+        st.markdown(f"### {station_name}")
+
+        if not station_data:
+            st.error("No recent reports.")
+            return
+
+        title = station_data.get("title") or station_data.get("station_id") or station_name
+        pub_date = station_data.get("pub_date")
+        description = station_data.get("description")
+
+        st.caption(title)
+        st.markdown(f"**Latest update:** {pub_date if pub_date else 'Unavailable'}")
+
+        if description:
+            st.write(description)
+        else:
+            st.write("No recent reports.")
+
+
+# =========================
+# DATA LOAD
+# =========================
+buoy_results = []
+for buoy in BUOYS:
+    buoy_results.append(
+        {
+            "id": buoy["id"],
+            "name": buoy["name"],
+            "data": get_buoy_data(buoy["id"]),
+        }
+    )
+
+station_results = []
+for station in STATIONS:
+    station_results.append(
+        {
+            "name": station["name"],
+            "data": get_station_rss(station["url"], station["fallback_id"]),
+        }
+    )
+
+
+# =========================
+# OFFSHORE BUOY SNAPSHOT
+# =========================
+st.subheader("Offshore Buoy Snapshot")
+
+with st.expander("What do these buoy cards mean?", expanded=False):
+    st.markdown(
+        """
+        **Buoy cards are offshore indicators for incoming Gulf swell energy.**  
+        They help track direction and swell period to show how the swell in the Gulf is trending.
+
+        **What to look for:**
+        - **Wave height**: Is there meaningful energy in the Gulf?
+        - **Dominant period**: Longer period usually means more organized swell
+        - **Mean wave direction**: What direction is the swell coming from?
+        - **Trend**: Are conditions building, holding, or fading?
+
+        **Important:**  
+        These buoys are not surf spots. They are offshore indicators.
+
+        The actual local call is in the **Pensacola Surf Outlook** section below.
+        """
+    )
+
+buoy_cols = st.columns(len(buoy_results))
+for col, buoy in zip(buoy_cols, buoy_results):
+    with col:
+        render_buoy_card(buoy["name"], buoy["id"], buoy["data"])
+
+
+# =========================
+# PENSACOLA SURF OUTLOOK
+# =========================
+st.subheader("Pensacola Surf Outlook")
+
+outlook = score_surf([b["data"] for b in buoy_results])
+
+st.info(outlook["headline"])
+st.write(outlook["body"])
+
+best_local_wind_source = None
+for b in buoy_results:
+    data = b["data"]
+    if data and data.get("WDIR") is not None and data.get("WSPD") is not None:
+        best_local_wind_source = data
+        break
+
+if best_local_wind_source:
+    st.write(
+        f"**Wind note:** {wind_comment(best_local_wind_source.get('WDIR'), best_local_wind_source.get('WSPD'))}"
+    )
+else:
+    st.write("**Wind note:** Wind data unavailable.")
 
 st.caption(
     "Buoy cards are offshore indicators for incoming Gulf swell energy. "
-    "They help track direction and swell period to show how the swell in the Gulf is trending"
+    "They help track direction and swell period to show how the swell in the Gulf is trending."
 )
 
 
-# -----------------------------
-# LOAD DATA
-# -----------------------------
-buoys = {}
-for s in STATIONS:
-    try:
-        buoys[s] = parse_data(s)
-    except:
-        buoys[s] = None
+# =========================
+# LOCAL STATION REPORTS
+# =========================
+st.subheader("Local Station Reports")
 
-if all(v is None for v in buoys.values()):
-    st.error("Could not load any buoy data right now.")
-    st.stop()
+station_cols = st.columns(len(station_results))
+for col, station in zip(station_cols, station_results):
+    with col:
+        render_station_card(station["name"], station["data"])
 
 
-# -----------------------------
-# BUOY CARDS
-# -----------------------------
-st.subheader("Buoy Observations")
+# =========================
+# RAW DATA / DEBUG
+# =========================
+with st.expander("Show raw buoy table", expanded=False):
+    raw_rows = []
+    for item in buoy_results:
+        data = item["data"]
+        raw_rows.append(
+            {
+                "Buoy": item["id"],
+                "Name": item["name"],
+                "Timestamp": data.get("timestamp") if data else None,
+                "WVHT_ft": data.get("WVHT") if data else None,
+                "DPD_s": data.get("DPD") if data else None,
+                "MWD_deg": data.get("MWD") if data else None,
+                "WDIR_deg": data.get("WDIR") if data else None,
+                "WSPD_kt": data.get("WSPD") if data else None,
+                "GST_kt": data.get("GST") if data else None,
+                "ATMP_C": data.get("ATMP") if data else None,
+                "WTMP_C": data.get("WTMP") if data else None,
+                "PRES_hPa": data.get("PRES") if data else None,
+            }
+        )
 
-cols = st.columns(3)
-
-for i, (station, data) in enumerate(buoys.items()):
-    with cols[i]:
-        st.markdown(f"### {station} - {STATIONS[station]['name']}")
-
-        st.markdown("""
-- Is energy in the Gulf?
-- What direction is it coming from?
-- Use them to start your own local surf forecasting
-
-The actual surf report is in the Pensacola Surf Outlook section below.
-""")
-
-        if data is None:
-            st.write("No data")
-        else:
-            st.write(f"Wave Height: {data['WVHT']} m")
-            st.write(f"Period: {data['DPD']} s")
-            st.write(f"Direction: {data['MWD']}° {deg_to_compass(data['MWD'])}")
-            st.write(f"Wind: {deg_to_compass(data['WDIR'])} {data['WSPD']} m/s")
-
-
-# -----------------------------
-# SURF OUTLOOK
-# -----------------------------
-st.subheader("Pensacola Surf Outlook")
-
-result = surf_score(buoys)
-
-st.markdown(f"## {result}")
+    st.dataframe(pd.DataFrame(raw_rows), use_container_width=True)
