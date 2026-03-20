@@ -1,5 +1,6 @@
 import math
-from datetime import datetime, timezone
+import re
+from email.utils import parsedate_to_datetime
 
 import pandas as pd
 import requests
@@ -25,7 +26,6 @@ BUOYS = [
     {"id": "42003", "name": "East Gulf"},
 ]
 
-# You can swap / add local stations here later if you want.
 STATIONS = [
     {
         "name": "Pensacola NAS",
@@ -53,7 +53,7 @@ def safe_float(value, default=None):
         if value is None:
             return default
         s = str(value).strip()
-        if s in {"", "MM", "N/A", "NaN", "nan", "-999", "999.0"}:
+        if s in {"", "MM", "N/A", "NaN", "nan", "-999", "999.0", "999", "-99"}:
             return default
         return float(s)
     except (ValueError, TypeError):
@@ -65,7 +65,7 @@ def safe_int(value, default=None):
         if value is None:
             return default
         s = str(value).strip()
-        if s in {"", "MM", "N/A", "NaN", "nan", "-999", "999"}:
+        if s in {"", "MM", "N/A", "NaN", "nan", "-999", "999", "-99"}:
             return default
         return int(float(s))
     except (ValueError, TypeError):
@@ -90,8 +90,10 @@ def format_time_string(ts):
 def direction_to_compass(deg):
     if deg is None:
         return "—"
-    dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    dirs = [
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+        "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"
+    ]
     idx = int((deg + 11.25) / 22.5) % 16
     return dirs[idx]
 
@@ -99,7 +101,6 @@ def direction_to_compass(deg):
 def swell_direction_hint(deg):
     if deg is None:
         return "Unknown direction"
-
     if 70 <= deg <= 140:
         return "E/SE swell angle"
     elif 141 <= deg <= 190:
@@ -108,65 +109,85 @@ def swell_direction_hint(deg):
         return "SW/W swell angle"
     elif 40 <= deg < 70:
         return "NE/E swell angle"
-    else:
-        return "Less direct Gulf angle"
+    return "Less direct Gulf angle"
 
 
-def get_buoy_text(station_id):
-    url = f"https://www.ndbc.noaa.gov/data/realtime2/{station_id}.txt"
-    r = requests.get(url, timeout=15)
+def fetch_text(url):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (PensacolaSurfWatch)",
+        "Accept": "text/plain, text/html, */*",
+    }
+    r = requests.get(url, headers=headers, timeout=20)
     r.raise_for_status()
     return r.text
 
 
-def parse_buoy_text(text):
-    lines = [line for line in text.splitlines() if line.strip() and not line.startswith("#")]
-    if len(lines) < 2:
-        return None
+def parse_ndbc_realtime_text(text):
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError("Empty NOAA response")
 
-    header = lines[0].split()
-    rows = [line.split() for line in lines[1:]]
-    rows = [r for r in rows if len(r) >= len(header)]
+    # NOAA realtime2 text usually has:
+    # line 1 = header
+    # line 2 = units
+    # remaining = data
+    non_comment = [line for line in lines if not line.startswith("#")]
+    if len(non_comment) < 3:
+        raise ValueError("Not enough non-comment lines in NOAA response")
+
+    header = non_comment[0].split()
+    data_lines = non_comment[2:]  # skip units line
+
+    rows = []
+    for line in data_lines:
+        parts = line.split()
+        if len(parts) < len(header):
+            continue
+        rows.append(parts[:len(header)])
 
     if not rows:
-        return None
+        raise ValueError("No valid data rows found in NOAA response")
 
     df = pd.DataFrame(rows, columns=header)
 
-    needed_time_cols = ["YY", "MM", "DD", "hh", "mm"]
-    for col in needed_time_cols:
+    required = ["YY", "MM", "DD", "hh", "mm"]
+    for col in required:
         if col not in df.columns:
-            return None
+            raise ValueError(f"Missing required column: {col}")
 
-    def build_ts(row):
+    def build_timestamp(row):
+        yy = safe_int(row["YY"])
+        mm = safe_int(row["MM"])
+        dd = safe_int(row["DD"])
+        hh = safe_int(row["hh"])
+        minute = safe_int(row["mm"])
+
+        if None in (yy, mm, dd, hh, minute):
+            return pd.NaT
+
+        if yy < 100:
+            yy += 2000
+
         try:
-            yy = safe_int(row.get("YY"))
-            mm = safe_int(row.get("MM"))
-            dd = safe_int(row.get("DD"))
-            hh = safe_int(row.get("hh"))
-            minute = safe_int(row.get("mm"))
-
-            if None in {yy, mm, dd, hh, minute}:
-                return pd.NaT
-
-            if yy < 100:
-                yy += 2000
-
             return pd.Timestamp(year=yy, month=mm, day=dd, hour=hh, minute=minute, tz="UTC")
         except Exception:
             return pd.NaT
 
-    df["timestamp"] = df.apply(build_ts, axis=1)
+    df["timestamp"] = df.apply(build_timestamp, axis=1)
 
     numeric_cols = [
         "WVHT", "DPD", "APD", "MWD", "WDIR", "WSPD", "GST",
-        "ATMP", "WTMP", "PRES"
+        "ATMP", "WTMP", "PRES", "BAR", "DEWP", "VIS", "TIDE"
     ]
     for col in numeric_cols:
         if col in df.columns:
             df[col] = df[col].apply(safe_float)
 
-    df = df.sort_values("timestamp", ascending=False).reset_index(drop=True)
+    df = df.dropna(subset=["timestamp"]).sort_values("timestamp", ascending=False).reset_index(drop=True)
+
+    if df.empty:
+        raise ValueError("All timestamps failed to parse")
+
     latest = df.iloc[0].to_dict()
     latest["history"] = df
     return latest
@@ -174,39 +195,41 @@ def parse_buoy_text(text):
 
 @st.cache_data(ttl=900)
 def get_buoy_data(station_id):
-    try:
-        text = get_buoy_text(station_id)
-        return parse_buoy_text(text)
-    except Exception:
+    url = f"https://www.ndbc.noaa.gov/data/realtime2/{station_id}.txt"
+    text = fetch_text(url)
+    return parse_ndbc_realtime_text(text)
+
+
+def extract_tag(text, tag):
+    match = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL | re.IGNORECASE)
+    return match.group(1).strip() if match else None
+
+
+def parse_rss_pubdate(pub_date):
+    if not pub_date:
         return None
+    try:
+        dt = parsedate_to_datetime(pub_date)
+        return dt.strftime("%b %d, %I:%M %p %Z")
+    except Exception:
+        return pub_date
 
 
 @st.cache_data(ttl=900)
 def get_station_rss(url, fallback_id):
     try:
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        text = r.text
+        text = fetch_text(url)
 
-        title = None
-        pub_date = None
-        description = None
+        title_matches = re.findall(r"<title>(.*?)</title>", text, re.DOTALL | re.IGNORECASE)
+        title = title_matches[1].strip() if len(title_matches) > 1 else fallback_id
 
-        if "<title>" in text:
-            parts = text.split("<title>")
-            if len(parts) > 2:
-                title = parts[2].split("</title>")[0].strip()
-
-        if "<pubDate>" in text:
-            pub_date = text.split("<pubDate>")[1].split("</pubDate>")[0].strip()
-
-        if "<description>" in text:
-            description = text.split("<description>")[1].split("</description>")[0].strip()
+        pub_date = extract_tag(text, "pubDate")
+        description = extract_tag(text, "description")
 
         return {
             "station_id": fallback_id,
             "title": title,
-            "pub_date": pub_date,
+            "pub_date": parse_rss_pubdate(pub_date),
             "description": description,
         }
     except Exception:
@@ -222,10 +245,6 @@ def wind_comment(wdir, wspd):
     if wdir is None or wspd is None:
         return "Wind data unavailable."
 
-    # Rough Gulf Coast / Pensacola take:
-    # Offshore-ish: N, NNE, NE
-    # Side/side-on: E, ENE, NW
-    # Onshore-ish: SE, S, SSW, SW
     if (wdir >= 315 or wdir <= 45):
         flow = "more offshore/favorable"
     elif 46 <= wdir <= 90 or 271 <= wdir < 315:
@@ -270,7 +289,7 @@ def score_surf(buoy_data_list):
     if avg_h >= 4 and avg_p >= 7:
         headline = "Most likely rideable"
         body = (
-            f"Offshore Gulf energy looks more real than background chop right now "
+            f"Offshore Gulf energy looks more real than background chop right now, "
             f"with average swell around {avg_h:.1f} ft at {avg_p:.1f}s."
         )
     elif avg_h >= 2.5 and avg_p >= 6:
@@ -287,7 +306,11 @@ def score_surf(buoy_data_list):
         )
 
     if avg_d is not None:
-        body += f" Mean swell direction is around {avg_d:.0f}° ({direction_to_compass(avg_d)}), which reads as {swell_direction_hint(avg_d).lower()}."
+        body += (
+            f" Mean swell direction is around {avg_d:.0f}° "
+            f"({direction_to_compass(avg_d)}), which reads as "
+            f"{swell_direction_hint(avg_d).lower()}."
+        )
 
     return {
         "headline": headline,
@@ -313,7 +336,10 @@ def render_buoy_card(name, station_id, data):
         c1, c2, c3 = st.columns(3)
         c1.metric("Wave Height", format_value(wvht, " ft"))
         c2.metric("Dominant Period", format_value(dpd, " s"))
-        c3.metric("Direction", f"{int(mwd)}° {direction_to_compass(mwd)}" if mwd is not None else "—")
+        c3.metric(
+            "Direction",
+            f"{int(mwd)}° {direction_to_compass(mwd)}" if mwd is not None else "—"
+        )
 
         st.markdown(f"**Latest update:** {format_time_string(timestamp)}")
 
@@ -356,14 +382,27 @@ def render_station_card(station_name, station_data):
 # DATA LOAD
 # =========================
 buoy_results = []
+buoy_errors = []
+
 for buoy in BUOYS:
-    buoy_results.append(
-        {
-            "id": buoy["id"],
-            "name": buoy["name"],
-            "data": get_buoy_data(buoy["id"]),
-        }
-    )
+    try:
+        data = get_buoy_data(buoy["id"])
+        buoy_results.append(
+            {
+                "id": buoy["id"],
+                "name": buoy["name"],
+                "data": data,
+            }
+        )
+    except Exception as e:
+        buoy_results.append(
+            {
+                "id": buoy["id"],
+                "name": buoy["name"],
+                "data": None,
+            }
+        )
+        buoy_errors.append(f'{buoy["id"]}: {str(e)}')
 
 station_results = []
 for station in STATIONS:
@@ -447,7 +486,7 @@ for col, station in zip(station_cols, station_results):
 
 
 # =========================
-# RAW DATA / DEBUG
+# DEBUG
 # =========================
 with st.expander("Show raw buoy table", expanded=False):
     raw_rows = []
@@ -469,5 +508,9 @@ with st.expander("Show raw buoy table", expanded=False):
                 "PRES_hPa": data.get("PRES") if data else None,
             }
         )
-
     st.dataframe(pd.DataFrame(raw_rows), use_container_width=True)
+
+if buoy_errors:
+    with st.expander("Buoy fetch/debug errors", expanded=False):
+        for err in buoy_errors:
+            st.code(err)
