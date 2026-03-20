@@ -431,18 +431,14 @@ with st.expander("What do these buoy cards mean?", expanded=False):
     st.markdown(
         """
         **Buoy cards are offshore indicators for incoming Gulf swell energy.**  
-        They help track direction and swell period to show how the swell in the Gulf is trending.
+        They help track direction and swell period to show how the swell in the Gulf is trending
 
-        **What to look for:**
-        - **Wave height**: Is there meaningful energy in the Gulf?
-        - **Dominant period**: Longer period usually means more organized swell
-        - **Mean wave direction**: What direction is the swell coming from?
-        - **Trend**: Are conditions building, holding, or fading?
+        **Use them to answer:**
+        - Is energy in the Gulf?
+        - What direction is it coming from?
+        - Use them to start your own local surf forecasting
 
-        **Important:**  
-        These buoys are not surf spots. They are offshore indicators.
-
-        The actual local call is in the **Pensacola Surf Outlook** section below.
+        The actual surf report is in the **Pensacola Surf Outlook** section below.
         """
     )
 
@@ -478,7 +474,7 @@ else:
 
 st.caption(
     "Buoy cards are offshore indicators for incoming Gulf swell energy. "
-    "They help track direction and swell period to show how the swell in the Gulf is trending."
+    "They help track direction and swell period to show how the swell in the Gulf is trending"
 )
 
 
