@@ -650,5 +650,5 @@ if buoy_errors:
 st.divider()
 st.caption(
     "Buoy cards are offshore indicators for incoming Gulf swell energy. "
-    "They help track direction, period, and trend — not local rideability at the buoy itself."
+    "They help track direction and swell period to show how the swell in the Gulf is trending"
 )
