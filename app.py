@@ -13,7 +13,7 @@ LOCAL_TZ = ZoneInfo("America/Chicago")
 # You can change labels here anytime
 STATIONS = {
     "42039": "Pensacola - 115nm SSE",
-    "42040": "LuLu",
+    "42040": "Dauphin Island",
     "42001": "Mid Gulf",
     "42026": "West Tampa",
 }
@@ -260,7 +260,7 @@ This is a simple first-pass score:
 - a little help for lighter winds
 - a little help for N/NE/E wind directions
 
-We can tune this next so it matches what *you* actually like to surf.
+
         """
     )
 
