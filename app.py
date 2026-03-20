@@ -13,7 +13,42 @@ import streamlit as st
 st.set_page_config(page_title="Pensacola Surf Watch", layout="wide")
 
 st.title("Pensacola Surf Watch")
-st.caption("Offshore buoy trends, local station conditions, and a simple Pensacola surf outlook.")
+st.caption("Simple local buoy dashboard")
+
+
+# ===== NAUTICAL MAP GOES HERE =====
+import folium
+from streamlit.components.v1 import html
+
+BUOYS = [
+    {"name": "42012", "label": "Orange Beach", "lat": 30.060, "lon": -87.548},
+    {"name": "42001", "label": "Mid Gulf", "lat": 25.926, "lon": -89.662},
+    {"name": "42040", "label": "Dauphin Island", "lat": 29.207, "lon": -88.237},
+]
+
+m = folium.Map(location=[28.9, -88.5], zoom_start=5, tiles=None)
+
+folium.WmsTileLayer(
+    url="https://gis.charttools.noaa.gov/arcgis/services/MCS/ENCOnline/MapServer/WMSServer?",
+    name="NOAA Nautical Chart",
+    layers="0",
+    fmt="image/png",
+    transparent=False,
+    attr="NOAA"
+).add_to(m)
+
+for buoy in BUOYS:
+    folium.Marker(
+        [buoy["lat"], buoy["lon"]],
+        tooltip=buoy["name"]
+    ).add_to(m)
+
+html(m._repr_html_(), height=600)
+# ===== END MAP =====
+
+
+# ===== YOUR EXISTING BUOY CARDS BELOW THIS =====
+# (do not delete anything below)
 
 
 # =========================
