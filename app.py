@@ -86,6 +86,7 @@ def format_time_string(ts):
     except Exception:
         return "Time unavailable"
 
+
 def format_direction(deg, fallback="—"):
     deg = safe_float(deg)
     if deg is None:
@@ -98,6 +99,7 @@ def format_direction_paren(deg, fallback="—"):
     if deg is None:
         return fallback
     return f"{int(deg)}° ({direction_to_compass(deg)})"
+
 
 def direction_to_compass(deg):
     deg = safe_float(deg)
@@ -146,13 +148,13 @@ def parse_ndbc_realtime_text(text):
     for line in lines:
         stripped = line.strip()
 
-        # NOAA header often looks like:
-        #YY  MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD PRES ATMP WTMP DEWP VIS TIDE
         if stripped.startswith("#"):
             candidate = stripped.lstrip("#").strip()
             parts = candidate.split()
+
             if {"YY", "MM", "DD", "hh", "mm"}.issubset(set(parts)):
                 header = parts
+
             continue
 
         data_lines.append(stripped)
@@ -163,7 +165,10 @@ def parse_ndbc_realtime_text(text):
     rows = []
     for line in data_lines:
         parts = line.split()
-        if len(parts) >= len(header):
+
+        if len(parts) == len(header):
+            rows.append(parts)
+        elif len(parts) > len(header):
             rows.append(parts[:len(header)])
 
     if not rows:
@@ -218,6 +223,10 @@ def parse_ndbc_realtime_text(text):
 def get_buoy_data(station_id):
     url = f"https://www.ndbc.noaa.gov/data/realtime2/{station_id}.txt"
     text = fetch_text(url)
+
+    if not text or not text.strip():
+        raise ValueError(f"{station_id}: NOAA returned empty text")
+
     return parse_ndbc_realtime_text(text)
 
 
@@ -368,21 +377,6 @@ def render_buoy_card(name, station_id, data):
             desc_bits.append(f"{dpd:.1f}s")
         if mwd is not None:
             desc_bits.append(format_direction_paren(mwd))
-
-        if desc_bits:
-            st.write(" | ".join(desc_bits))
-        else:
-            st.write("Limited offshore data available.")
-
-        st.markdown(f"**Latest update:** {format_time_string(timestamp)}")
-
-        desc_bits = []
-        if wvht is not None:
-            desc_bits.append(f"{wvht:.1f} ft")
-        if dpd is not None:
-            desc_bits.append(f"{dpd:.1f}s")
-        if mwd is not None:
-            desc_bits.append(f"{int(mwd)}° ({direction_to_compass(mwd)})")
 
         if desc_bits:
             st.write(" | ".join(desc_bits))
