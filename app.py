@@ -459,9 +459,9 @@ def build_local_outlook(buoy_snapshots, local):
     elif wind_quality == "fair":
         best_window = "There may be a decent window before winds worsen."
     elif wind_quality == "bumpy":
-        best_window = "Rideable for a look, but local texture likely limits quality."
+        best_window = "Rideable, but local winds likely limits quality."
     elif wind_quality == "choppy":
-        best_window = "Conditions likely stay pretty chopped up unless winds back off."
+        best_window = "Conditions likely stay pretty messy up unless winds back off."
     elif wind_quality == "windy but workable":
         best_window = "There may be a window, but the wind could still be a factor."
     else:
@@ -508,9 +508,9 @@ These buoy cards are upstream swell indicators, not surf forecasts.
 They help answer:
 - Is energy in the Gulf?
 - What direction is it coming from?
-- Is it building, holding, or fading before it reaches the coast?
+- Use them to start your own local surf forecasting
 
-The actual surf call is in the Pensacola Surf Outlook section below.
+The actual surf report is in the Pensacola Surf Outlook section below.
         """
     )
 
